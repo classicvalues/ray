@@ -46,7 +46,7 @@ Steps are functions annotated with the ``@workflow.step`` decorator. Steps are r
     def add(a: int, b: int) -> int:
         return a + b
 
-    output: Workflow[int] = add.step(100, one.step())
+    output: "Workflow[int]" = add.step(100, one.step())
 
 Workflows
 ~~~~~~~~~
@@ -66,6 +66,9 @@ Large data objects can be stored in the Ray object store. References to these ob
 
 .. code-block:: python
     :caption: Using Ray objects in a workflow:
+
+    import ray
+    from typing import List
 
     @ray.remote
     def hello():
@@ -103,7 +106,7 @@ Workflows can generate new steps at runtime. When a step returns a step future a
 
 Virtual Actors
 ~~~~~~~~~~~~~~
-Virtual actors have their state durably logged to workflow storage. This enables the management of long-running business workflows. Virtual actors can launch sub-workflows from method calls and receive timer-based and externally triggered events. [Events support is under development.]
+Virtual actors have their state durably logged to workflow storage. This enables the management of long-running business workflows. Virtual actors can launch sub-workflows from method calls and receive timer-based and externally triggered events.
 
 .. code-block:: python
     :caption: A persistent virtual actor counter:
@@ -121,3 +124,20 @@ Virtual actors have their state durably logged to workflow storage. This enables
     c1 = Counter.get_or_create("counter_1")
     assert c1.incr.run() == 1
     assert c1.incr.run() == 2
+
+Events
+~~~~~~
+Workflows can be efficiently triggered by timers or external events using the event system.
+
+.. code-block:: python
+    :caption: Using events.
+
+    # Sleep is a special type of event.
+    sleep_step = workflow.sleep(100)
+
+    # `wait_for_events` allows for pluggable event listeners.
+    event_step = workflow.wait_for_event(MyEventListener)
+
+
+    # If a step's arguments include events, the step function won't be executed until all of the events have occured.
+    gather.step(sleep_step, event_step, "hello world").run()

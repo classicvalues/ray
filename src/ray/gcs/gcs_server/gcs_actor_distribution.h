@@ -18,14 +18,14 @@
 
 #include "ray/common/id.h"
 #include "ray/common/status.h"
-#include "ray/common/task/scheduling_resources.h"
 #include "ray/common/task/task_spec.h"
 #include "ray/gcs/gcs_server/gcs_actor_manager.h"
 #include "ray/gcs/gcs_server/gcs_actor_scheduler.h"
 #include "ray/gcs/gcs_server/gcs_node_manager.h"
-#include "ray/gcs/gcs_server/gcs_resource_manager.h"
-#include "ray/gcs/gcs_server/gcs_resource_scheduler.h"
 #include "ray/gcs/gcs_server/gcs_table_storage.h"
+#include "ray/raylet/scheduling/cluster_resource_manager.h"
+#include "ray/raylet/scheduling/cluster_resource_scheduler.h"
+#include "ray/raylet/scheduling/scheduling_ids.h"
 #include "src/ray/protobuf/gcs.pb.h"
 
 namespace ray {
@@ -41,23 +41,17 @@ class GcsActorWorkerAssignment
   ///
   /// \param node_id ID of node on which this gcs actor worker assignment is allocated.
   /// \param acquired_resources Resources owned by this gcs actor worker assignment.
-  /// \param is_shared A flag to represent that whether the worker process can be shared.
-  GcsActorWorkerAssignment(const NodeID &node_id, const ResourceSet &acquired_resources,
-                           bool is_shared);
-
+  GcsActorWorkerAssignment(const NodeID &node_id,
+                           const ResourceRequest &acquired_resources);
   const NodeID &GetNodeID() const;
 
-  const ResourceSet &GetResources() const;
-
-  bool IsShared() const;
+  const ResourceRequest &GetResources() const;
 
  private:
   /// ID of node on which this actor worker assignment is allocated.
   const NodeID node_id_;
   /// Resources owned by this actor worker assignment.
-  const ResourceSet acquired_resources_;
-  /// A flag to represent that whether the worker process can be shared.
-  const bool is_shared_;
+  const ResourceRequest acquired_resources_;
 };
 
 /// GcsBasedActorScheduler inherits from GcsActorScheduler. Its scheduling strategy is
@@ -70,8 +64,7 @@ class GcsBasedActorScheduler : public GcsActorScheduler {
   /// \param io_context The main event loop.
   /// \param gcs_actor_table Used to flush actor info to storage.
   /// \param gcs_node_manager The node manager which is used when scheduling.
-  /// \param gcs_resource_manager The resource manager that maintains cluster resources.
-  /// \param gcs_resource_scheduler The scheduler to select nodes based on cluster
+  /// \param cluster_resource_scheduler The scheduler to select nodes based on cluster
   /// resources.
   /// \param schedule_failure_handler Invoked when there are no available nodes to
   /// schedule actors.
@@ -81,17 +74,26 @@ class GcsBasedActorScheduler : public GcsActorScheduler {
   /// \param client_factory Factory to create remote core worker client, default factor
   /// will be used if not set.
   explicit GcsBasedActorScheduler(
-      instrumented_io_context &io_context, gcs::GcsActorTable &gcs_actor_table,
-      const GcsNodeManager &gcs_node_manager, std::shared_ptr<gcs::GcsPubSub> gcs_pub_sub,
-      std::shared_ptr<GcsResourceManager> gcs_resource_manager,
-      std::shared_ptr<GcsResourceScheduler> gcs_resource_scheduler,
-      std::function<void(std::shared_ptr<GcsActor>)> schedule_failure_handler,
-      std::function<void(std::shared_ptr<GcsActor>, const rpc::PushTaskReply &reply)>
-          schedule_success_handler,
+      instrumented_io_context &io_context,
+      GcsActorTable &gcs_actor_table,
+      const GcsNodeManager &gcs_node_manager,
+      std::shared_ptr<ClusterResourceScheduler> cluster_resource_scheduler,
+      GcsActorSchedulerFailureCallback schedule_failure_handler,
+      GcsActorSchedulerSuccessCallback schedule_success_handler,
       std::shared_ptr<rpc::NodeManagerClientPool> raylet_client_pool,
-      rpc::ClientFactoryFn client_factory = nullptr);
+      rpc::ClientFactoryFn client_factory = nullptr,
+      std::function<void(const NodeID &, const rpc::ResourcesData &)>
+          normal_task_resources_changed_callback = nullptr);
 
   virtual ~GcsBasedActorScheduler() = default;
+
+  /// Handle the destruction of an actor.
+  ///
+  /// \param actor The actor to be destoryed.
+  void OnActorDestruction(std::shared_ptr<GcsActor> actor) override;
+
+  /// Add resources changed event handler.
+  void AddResourcesChangedListener(std::function<void()> listener);
 
  protected:
   /// Select a node for the actor based on cluster resources.
@@ -114,39 +116,49 @@ class GcsBasedActorScheduler : public GcsActorScheduler {
                               const rpc::RequestWorkerLeaseReply &reply) override;
 
  private:
-  /// Select an existing or allocate a new actor worker assignment for the actor.
-  std::unique_ptr<GcsActorWorkerAssignment> SelectOrAllocateActorWorkerAssignment(
-      std::shared_ptr<GcsActor> actor, bool need_sole_actor_worker_assignment);
-
   /// Allocate a new actor worker assignment.
   ///
-  /// \param required_resources The resources that the worker required.
-  /// \param is_shared If the worker is shared by multiple actors or not.
   /// \param task_spec The specification of the task.
-  std::unique_ptr<GcsActorWorkerAssignment> AllocateNewActorWorkerAssignment(
-      const ResourceSet &required_resources, bool is_shared,
+  std::unique_ptr<GcsActorWorkerAssignment> AllocateActorWorkerAssignment(
       const TaskSpecification &task_spec);
 
+  /// TODO(Chong-Li): This is to accommodate the Raylet scheduling's behavior (different
+  /// resources for scheduling and allocation). We need to unify these two at the end.
   /// Allocate resources for the actor.
   ///
-  /// \param required_resources The resources to be allocated.
-  /// \return ID of the node from which the resources are allocated.
-  NodeID AllocateResources(const ResourceSet &required_resources);
+  /// \param required_placement_resources The required resources of the task for
+  /// scheduling. \param required_resources The required resources of the task for
+  /// allocation. \return ID of the node from which the resources are allocated.
+  scheduling::NodeID AllocateResources(
+      const ResourceRequest &required_placement_resources,
+      const ResourceRequest &required_resources);
 
-  NodeID GetHighestScoreNodeResource(const ResourceSet &required_resources) const;
+  scheduling::NodeID GetHighestScoreNodeResource(
+      const ResourceRequest &required_resources) const;
 
   void WarnResourceAllocationFailure(const TaskSpecification &task_spec,
-                                     const ResourceSet &required_resources) const;
+                                     const ResourceRequest &required_resources) const;
 
   /// A rejected rely means resources were preempted by normal tasks. Then
   /// update the the cluster resource view and reschedule immediately.
   void HandleWorkerLeaseRejectedReply(std::shared_ptr<GcsActor> actor,
                                       const rpc::RequestWorkerLeaseReply &reply);
 
-  std::shared_ptr<GcsResourceManager> gcs_resource_manager_;
+  /// Reset the actor's current assignment, while releasing acquired resources.
+  void ResetActorWorkerAssignment(GcsActor *actor);
 
-  /// Gcs resource scheduler
-  std::shared_ptr<GcsResourceScheduler> gcs_resource_scheduler_;
+  /// Notify that the cluster resources are changed.
+  void NotifyClusterResourcesChanged();
+
+  /// The resource changed listeners.
+  std::vector<std::function<void()>> resource_changed_listeners_;
+
+  /// Cluster resource scheduler
+  std::shared_ptr<ClusterResourceScheduler> cluster_resource_scheduler_;
+
+  /// Normal task resources changed callback.
+  std::function<void(const NodeID &, const rpc::ResourcesData &)>
+      normal_task_resources_changed_callback_;
 };
 }  // namespace gcs
 }  // namespace ray

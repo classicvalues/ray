@@ -6,4 +6,4 @@ pandas
 requests
 tabulate
 tensorflow
-yapf==0.23.0
+black==21.12b0

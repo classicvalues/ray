@@ -2,14 +2,12 @@
 Calling Deployments via HTTP and Python
 =======================================
 
+This section should help you:
+
+- understand how deployments can be called in two ways: from HTTP and from Python
+- integrate Ray Serve with an existing web server
+
 .. contents:: Calling Deployments via HTTP and Python
-
-Overview
-========
-
-Deployments can be called in two ways: from HTTP and from Python.
-On this page we will show you both of these approaches and then give a tutorial
-on how to integrate Ray Serve with an existing web server.
 
 Calling Deployments via HTTP
 ============================
@@ -17,7 +15,7 @@ Calling Deployments via HTTP
 Basic Example
 ^^^^^^^^^^^^^
 
-As described in the :doc:`tutorial`, when you create a deployment, it is exposed over HTTP by default at ``/{deployment_name}``. You can change the route by specifying the ``route_prefix`` argument to the :mod:`@serve.deployment <ray.serve.api.deployment>` decorator.
+As shown in the :ref:`serve_quickstart`, when you create a deployment, it is exposed over HTTP by default at ``/{deployment_name}``. You can change the route by specifying the ``route_prefix`` argument to the :mod:`@serve.deployment <ray.serve.api.deployment>` decorator.
 
 .. code-block:: python
 
@@ -38,7 +36,7 @@ FastAPI HTTP Deployments
 If you want to define more complex HTTP handling logic, Serve integrates with `FastAPI <https://fastapi.tiangolo.com/>`_. This allows you to define a Serve deployment using the :mod:`@serve.ingress <ray.serve.api.ingress>` decorator that wraps a FastAPI app with its full range of features. The most basic example of this is shown below, but for more details on all that FastAPI has to offer such as variable routes, automatic type validation, dependency injection (e.g., for database connections), and more, please check out `their documentation <https://fastapi.tiangolo.com/>`_.
 
 .. code-block:: python
-    
+
     import ray
 
     from fastapi import FastAPI
@@ -60,9 +58,9 @@ If you want to define more complex HTTP handling logic, Serve integrates with `F
 Now if you send a request to ``/hello``, this will be routed to the ``root`` method of our deployment. We can also easily leverage FastAPI to define multiple routes with different HTTP methods:
 
 .. code-block:: python
-    
+
     import ray
-    
+
     from fastapi import FastAPI
     from ray import serve
 
@@ -86,9 +84,9 @@ Now if you send a request to ``/hello``, this will be routed to the ``root`` met
 You can also pass in an existing FastAPI app to a deployment to serve it as-is:
 
 .. code-block:: python
-    
+
     import ray
-    
+
     from fastapi import FastAPI
     from ray import serve
 
@@ -107,12 +105,14 @@ You can also pass in an existing FastAPI app to a deployment to serve it as-is:
     class FastAPIWrapper:
         pass
 
+    FastAPIWrapper.deploy()
+
 This is useful for scaling out an existing FastAPI app with no modifications necessary.
 Existing middlewares, automatic OpenAPI documentation generation, and other advanced FastAPI features should work as-is.
 You can also combine routes defined this way with routes defined on the deployment:
 
 .. code-block:: python
-    
+
     import ray
 
     from fastapi import FastAPI
@@ -140,6 +140,9 @@ You can also combine routes defined this way with routes defined on the deployme
         def method(self):
             return "Hello 2!"
 
+    FastAPIWrapper1.deploy()
+    FastAPIWrapper2.deploy()
+
 In this example, requests to both ``/api1`` and ``/api2`` would return ``Hello from the root!`` while a request to ``/api1/subpath`` would return ``Hello 1!`` and a request to ``/api2/subpath`` would return ``Hello 2!``.
 
 To try it out, save a code snippet in a local python file (i.e. main.py) and in the same directory, run the following commands to start a local Ray cluster on your machine.
@@ -148,6 +151,60 @@ To try it out, save a code snippet in a local python file (i.e. main.py) and in 
 
     ray start --head
     python main.py
+
+.. _serve-http-adapters:
+
+HTTP Adapters
+^^^^^^^^^^^^^
+
+Ray Serve provides a suite of adapters to convert HTTP requests to ML inputs like `numpy` arrays.
+You can just use it with :ref:`Ray AI Runtime (AIR) model wrapper<air-serve-integration>` feature
+to one click deploy pre-trained models.
+Alternatively, you can directly import them and put them into your FastAPI app.
+
+For example, we provide a simple adapter for n-dimensional array.
+
+With :ref:`model wrappers<air-serve-integration>`, you can specify it via the ``input_schema`` field.
+
+.. code-block:: python
+
+    from ray import serve
+    from ray.serve.http_adapters import json_to_ndarray
+    from ray.serve.model_wrappers import ModelWrapperDeployment
+
+    ModelWrapperDeployment.options(name="my_model").deploy(
+        my_ray_air_predictor,
+        my_ray_air_checkpoint,
+        input_schema=json_to_ndarray
+    )
+
+You can also bring the adapter to your own FastAPI app using
+`Depends <https://fastapi.tiangolo.com/tutorial/dependencies/#import-depends>`_.
+The input schema will automatically be part of the generated OpenAPI schema with FastAPI.
+
+.. code-block:: python
+
+    from fastapi import FastAPI, Depends
+    from ray.serve.http_adapters import json_to_ndarray
+
+    app = FastAPI()
+
+    @app.post("/endpoint")
+    async def endpoint(np_array = Depends(json_to_ndarray)):
+        ...
+
+It has the following schema for input:
+
+.. _serve-ndarray-schema:
+
+.. autopydantic_model:: ray.serve.http_adapters.NdArray
+
+
+Here is a list of adapters and please feel free to `contribute more <https://github.com/ray-project/ray/issues/new/choose>`_!
+
+.. automodule:: ray.serve.http_adapters
+    :members: json_to_ndarray, image_to_ndarray
+
 
 Configuring HTTP Server Locations
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -199,8 +256,8 @@ reach a deployment through HTTP via a specific route. When you issue a request
 to a deployment through ``ServeHandle``, the request is load balanced across
 available replicas in the same way an HTTP request is.
 
-To call a Ray Serve deployment from python, use :mod:`Deployment.get_handle <ray.serve.api.Deployment>` 
-to get a handle to the deployment, then use 
+To call a Ray Serve deployment from python, use :mod:`Deployment.get_handle <ray.serve.api.Deployment>`
+to get a handle to the deployment, then use
 :mod:`handle.remote <ray.serve.handle.RayServeHandle.remote>` to send requests
 to that deployment. These requests can pass ordinary args and kwargs that are
 passed directly to the method. This returns a Ray ``ObjectRef`` whose result

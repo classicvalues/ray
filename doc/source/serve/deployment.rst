@@ -1,14 +1,17 @@
+.. _serve-deploy-tutorial:
+
 ===================
 Deploying Ray Serve
 ===================
+This section should help you:
 
-In the :doc:`core-apis`, you saw some of the basics of how to write Serve applications.
-This section will dive deeper into how Ray Serve runs on a Ray cluster and how you're able
-to deploy and update your Serve application over time.
+- understand how Ray Serve runs on a Ray cluster beyond the basics mentioned in :doc:`core-apis`
+- deploy and update your Serve application over time
+- monitor your Serve application using the Ray Dashboard and logging
 
 .. contents:: Deploying Ray Serve
 
-.. _serve-deploy-tutorial:
+.. _ray-serve-instance-lifetime:
 
 Lifetime of a Ray Serve Instance
 ================================
@@ -25,12 +28,12 @@ to update the Serve instance, you can run another script that connects to the sa
 
 All non-detached Serve instances will be started in the current namespace that was specified when connecting to the cluster. If a namespace is specified for a detached Serve instance, it will be used. Otherwise if the current namespace is anonymous, the Serve instance will be started in the ``serve`` namespace.
 
-If ``serve.start()`` is called again in a process in which there is already a running Serve instance, Serve will re-connect to the existing instance (regardless of whether the original instance was detached or not). To reconnect to a Serve instance that exists in the Ray cluster but not in the current process, connect to the cluster with the same namespace that was specified when starting the instance and run ``serve.start()``. 
+If ``serve.start()`` is called again in a process in which there is already a running Serve instance, Serve will re-connect to the existing instance (regardless of whether the original instance was detached or not). To reconnect to a Serve instance that exists in the Ray cluster but not in the current process, connect to the cluster with the same namespace that was specified when starting the instance and run ``serve.start()``.
 
 Deploying on a Single Node
 ==========================
 
-While Ray Serve makes it easy to scale out on a multi-node Ray cluster, in some scenarios a single node may suite your needs.
+While Ray Serve makes it easy to scale out on a multi-node Ray cluster, in some scenarios a single node may suit your needs.
 There are two ways you can run Ray Serve on a single node, shown below.
 In general, **Option 2 is recommended for most users** because it allows you to fully make use of Serve's ability to dynamically update running deployments.
 
@@ -40,6 +43,7 @@ In general, **Option 2 is recommended for most users** because it allows you to 
 
   import ray
   from ray import serve
+  import time
 
   # This will start Ray locally and start Serve on top of it.
   serve.start()
@@ -75,6 +79,7 @@ In general, **Option 2 is recommended for most users** because it allows you to 
     return "hello"
 
   my_func.deploy()
+
 
 Deploying on Kubernetes
 =======================
@@ -193,12 +198,12 @@ Now we can try querying the service by sending an HTTP request to the service fr
     # Get a shell inside of the head node.
     $ ray attach ray/python/ray/autoscaler/kubernetes/example-full.yaml
 
-    # Query the Ray Serve endpoint. This can be run from anywhere in the
+    # Query the Ray Serve deployment. This can be run from anywhere in the
     # Kubernetes cluster.
     $ curl -X GET http://$RAY_HEAD_SERVICE_HOST:8000/hello
     hello world
 
-In order to expose the Ray Serve endpoint externally, we would need to deploy the Service we created here behind an `Ingress`_ or a `NodePort`_.
+In order to expose the Ray Serve deployment externally, we would need to deploy the Service we created here behind an `Ingress`_ or a `NodePort`_.
 Please refer to the Kubernetes documentation for more information.
 
 .. _`Kubernetes default config`: https://github.com/ray-project/ray/blob/master/python/ray/autoscaler/kubernetes/example-full.yaml
@@ -206,6 +211,101 @@ Please refer to the Kubernetes documentation for more information.
 .. _`Ingress`: https://kubernetes.io/docs/concepts/services-networking/ingress/
 .. _`NodePort`: https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
 
+
+
+Health Checking
+===============
+By default, each actor making up a Serve deployment is health checked and restarted on failure.
+
+
+.. note::
+
+   User-defined health checks are experimental and may be subject to change before the interface is stabilized. If you have any feedback or run into any issues or unexpected behaviors, please file an issue on GitHub.
+
+You can customize this behavior to perform an application-level health check or to adjust the frequency/timeout.
+To define a custom healthcheck, define a ``check_health`` method on your deployment class.
+This method should take no arguments and return no result, raising an exception if the replica should be considered unhealthy.
+You can also customize how frequently the health check is run and the timeout when a replica will be deemed unhealthy if it hasn't responded in the deployment options.
+
+  .. code-block:: python
+
+    @serve.deployment(_health_check_period_s=10, _health_check_timeout_s=30)
+    class MyDeployment:
+        def __init__(self, db_addr: str):
+            self._my_db_connection = connect_to_db(db_addr)
+
+        def __call__(self, request):
+            return self._do_something_cool()
+
+        # Will be called by Serve to check the health of the replica.
+        def check_health(self):
+            if not self._my_db_connection.is_connected():
+                # The specific type of exception is not important.
+                raise RuntimeError("uh-oh, DB connection is broken.")
+
+.. tip::
+
+    You can use the Serve CLI command ``serve status`` to get status info
+    about your live deployments. The CLI was included with Serve when you did
+    ``pip install "ray[serve]"``. If you're checking your deployments on a
+    remote Ray cluster, make sure to include the Ray cluster's dashboard address
+    in the command: ``serve status --address [dashboard_address]``.
+
+Failure Recovery
+================
+Ray Serve is resilient to any component failures within the Ray cluster out of the box.
+You can checkout the detail of how process and worker node failure handled at :ref:`serve-ft-detail`.
+However, when the Ray head node goes down, you would need to recover the state by creating a new
+Ray cluster and re-deploys all Serve deployments into that cluster.
+
+.. note::
+  Ray currently cannot survive head node failure and we recommend using application specific
+  failure recovery solutions. Although Ray is not currently highly available (HA), it is on
+  the long term roadmap and being actively worked on.
+
+Ray Serve added an experimental feature to help recovering the state.
+This features enables Serve to write all your deployment configuration and code into a storage location.
+Upon Ray cluster failure and restarts, you can simply call Serve to reconstruct the state.
+
+Here is how to use it:
+
+.. warning::
+  The API is experimental and subject to change. We welcome you to test it out
+  and leave us feedback through github issues or discussion forum!
+
+
+You can use both the start argument and the CLI to specify it:
+
+.. code-block:: python
+
+    serve.start(_checkpoint_path=...)
+
+or
+
+.. code-block:: shell
+
+    serve start --checkpoint-path ...
+
+
+The checkpoint path argument accepts the following format:
+
+- ``file://local_file_path``
+- ``s3://bucket/path``
+- ``gs://bucket/path``
+- ``custom://importable.custom_python.Class/path``
+
+While we have native support for on disk, AWS S3, and Google Cloud Storage (GCS), there is no reason we cannot support more.
+
+In Kubernetes environment, we recommend using `Persistent Volumes`_ to create a disk and mount it into the Ray head node.
+For example, you can provision Azure Disk, AWS Elastic Block Store, or GCP Persistent Disk using the K8s `Persistent Volumes`_ API.
+Alternatively, you can also directly write to object store like S3.
+
+You can easily try to plug into your own implementation using the ``custom://`` path and inherit the `KVStoreBase`_ class.
+Feel free to open new github issues and contribute more storage backends!
+
+.. _`Persistent Volumes`: https://kubernetes.io/docs/concepts/storage/persistent-volumes/
+
+.. _`KVStoreBase`: https://github.com/ray-project/ray/blob/master/python/ray/serve/storage/kv_store_base.py
 
 .. _serve-monitoring:
 
@@ -230,33 +330,97 @@ In this example pictured above, we have a single-node cluster with a deployment 
 Logging
 -------
 
-Logging in Ray Serve uses Python's standard logging facility.
-
 .. note::
 
-  For an general overview of logging in Ray, see `Ray Logging <../ray-logging.html>`__.
+  For an overview of logging in Ray, see `Ray Logging <../ray-logging.html>`__.
 
-Tracing Backends and Replicas
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-When looking through log files of your Ray Serve application, it is useful to know which deployment and replica each log line originated from.
-To automatically include the current deployment and replica in your logs, simply call
-``logger = logging.getLogger("ray")``, and use ``logger`` within your deployment code:
 
-.. literalinclude:: ../../../python/ray/serve/examples/doc/snippet_logger.py
-  :lines: 1, 9, 11-13, 15-16
+Ray Serve uses Python's standard ``logging`` facility with the ``"ray.serve"`` named logger.
+By default, logs are emitted from actors both to ``stderr`` and on disk on each node at ``/tmp/ray/session_latest/logs/serve/``.
+This includes both system-level logs from the Serve controller and HTTP proxy as well as access logs and custom user logs produced from within deployment replicas.
 
-Querying a Serve endpoint with the above deployment will produce a log line like the following:
+In development, logs are streamed to the driver Ray program (the program that calls ``.deploy()`` or ``serve.run``, or the ``serve run`` CLI command) that deployed the deployments, so it's most convenient to keep the driver running for debugging.
+For example, let's run a basic Serve application and view the logs that are emitted.
+You can run this in an interactive shell like IPython to follow along.
+
+First we call ``serve.start()``:
+
+.. code-block:: python
+
+   from ray import serve
+
+   serve.start()
+
+This produces a few INFO-level log messages about startup from the Serve controller.
 
 .. code-block:: bash
 
-  (pid=42161) 2021-02-26 11:05:21,709     INFO snippet_logger.py:13 -- Some info! component=serve deployment=f replica=f#jZlnUI
+   2022-04-02 09:10:49,906 INFO services.py:1460 -- View the Ray dashboard at http://127.0.0.1:8265
+   (ServeController pid=67312) INFO 2022-04-02 09:10:51,386 controller 67312 checkpoint_path.py:17 - Using RayInternalKVStore for controller checkpoint and recovery.
+   (ServeController pid=67312) INFO 2022-04-02 09:10:51,492 controller 67312 http_state.py:108 - Starting HTTP proxy with name 'SERVE_CONTROLLER_ACTOR:xlehoa:SERVE_PROXY_ACTOR-node:127.0.0.1-0' on node 'node:127.0.0.1-0' listening on '127.0.0.1:8000'
 
-To write your own custom logger using Python's ``logging`` package, use the following method:
+Next, let's create a simple deployment that logs a custom log message when it's queried:
 
-.. autofunction:: ray.serve.get_replica_context
+.. code-block:: python
 
-Ray Serve logs can be ingested by your favorite external logging agent.  Ray logs from the current session are exported to the directory `/tmp/ray/session_latest/logs` and remain there until the next session starts.
+   import logging
+
+   logger = logging.getLogger("ray.serve")
+
+   @serve.deployment(route_prefix="/")
+   class SayHello:
+       def __call__(self, *args):
+           logger.info("Hello world!")
+           return "hi"
+   
+   SayHello.deploy()
+
+Running this code block, we first get some log messages from the controller saying that a new replica of the deployment is being created:
+
+.. code-block:: bash
+
+   (ServeController pid=67312) INFO 2022-04-02 09:16:13,323 controller 67312 deployment_state.py:1198 - Adding 1 replicas to deployment 'SayHello'.
+
+Then when we query the deployment, we get both a default access log as well as our custom ``"Hello world!"`` message.
+Note that these log lines are tagged with the deployment name followed by a unique identifier for the specific replica.
+These can be parsed by a logging stack such as ELK or Loki to enable searching logs by deployment and replica.
+
+.. code-block:: bash
+
+   handle = SayHello.get_handle()
+   ray.get(handle.remote())
+   (SayHello pid=67352) INFO 2022-04-02 09:20:08,975 SayHello SayHello#LBINMh <ipython-input-4-1e8854e5c9ba>:8 - Hello world!
+   (SayHello pid=67352) INFO 2022-04-02 09:20:08,975 SayHello SayHello#LBINMh replica.py:466 - HANDLE __call__ OK 0.3ms
+
+Querying the deployment over HTTP produces a similar access log message from the HTTP proxy:
+
+.. code-block:: bash
+
+   curl -X GET http://localhost:8000/
+   (HTTPProxyActor pid=67315) INFO 2022-04-02 09:20:08,976 http_proxy 127.0.0.1 http_proxy.py:310 - GET / 200 2.6ms
+   (SayHello pid=67352) INFO 2022-04-02 09:20:08,975 SayHello SayHello#LBINMh <ipython-input-4-1e8854e5c9ba>:8 - Hello world!
+   (SayHello pid=67352) INFO 2022-04-02 09:20:08,975 SayHello SayHello#LBINMh replica.py:466 - HANDLE __call__ OK 0.3ms
+
+
+You can also be able to view all of these log messages in the files in ``/tmp/ray/session_latest/logs/serve/``.
+
+To silence the replica-level logs or otherwise configure logging, configure the ``"ray.serve"`` logger *from inside the deployment constructor:*
+
+.. code-block:: python
+
+   import logging
+
+   logger = logging.getLogger("ray.serve")
+
+   @serve.deployment
+   class Silenced:
+       def __init__(self):
+           logger.setLevel(logging.ERROR)
+
+
+This will prevent the replica INFO-level logs from being written to STDOUT or to files on disk.
+You can also use your own custom logger, in which case you'll need to configure the behavior to write to STDOUT/STDERR, files on disk, or both.
 
 Tutorial: Ray Serve with Loki
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -288,9 +452,9 @@ Save the following file as ``promtail-local-config.yaml``:
   static_configs:
     - labels:
       job: ray
-      __path__: /tmp/ray/session_latest/logs/*.*
+      __path__: /tmp/ray/session_latest/logs/serve/*.*
 
-The relevant part for Ray is the ``static_configs`` field, where we have indicated the location of our log files with ``__path__``.  
+The relevant part for Ray is the ``static_configs`` field, where we have indicated the location of our log files with ``__path__``.
 The expression ``*.*`` will match all files, but not directories, which cause an error with Promtail.
 
 We will run Loki locally.  Grab the default config file for Loki with the following command in your terminal:
@@ -334,9 +498,9 @@ Now click "Explore" in the left-side panel.  You are ready to run some queries!
 
 To filter all these Ray logs for the ones relevant to our deployment, use the following `LogQL <https://grafana.com/docs/loki/latest/logql/>`__ query:
 
-.. code-block:: shell 
+.. code-block:: shell
 
-  {job="ray"} |= "deployment=Counter"
+  {job="ray"} |= "Counter"
 
 You should see something similar to the following:
 
@@ -373,12 +537,16 @@ The following metrics are exposed by Ray Serve:
      - The current number of queries being processed.
    * - ``serve_num_http_requests``
      - The number of HTTP requests processed.
+   * - ``serve_num_http_error_requests``
+     - The number of non-200 HTTP responses.
    * - ``serve_num_router_requests``
      - The number of requests processed by the router.
    * - ``serve_handle_request_counter``
      - The number of requests processed by this ServeHandle.
-   * - ``serve_deployment_queued_queries`` 
+   * - ``serve_deployment_queued_queries``
      - The number of queries for this deployment waiting to be assigned to a replica.
+   * - ``serve_num_deployment_http_error_requests``
+     - The number of non-200 HTTP responses returned by each deployment.
 
 To see this in action, run ``ray start --head --metrics-export-port=8080`` in your terminal, and then run the following script:
 
@@ -395,11 +563,12 @@ For example, after running the script for some time and refreshing ``localhost:8
 
 which indicates that the average processing latency is just over one second, as expected.
 
-You can even define a `custom metric <..ray-metrics.html#custom-metrics>`__ to use in your deployment, and tag it with the current deployment or replica.
+You can even define a :ref:`custom metric <application-level-metrics>` to use in your deployment, and tag it with the current deployment or replica.
 Here's an example:
 
 .. literalinclude:: ../../../python/ray/serve/examples/doc/snippet_custom_metric.py
-  :lines: 11-23
+  :start-after: __custom_metrics_deployment_start__
+  :end-before: __custom_metrics_deployment_end__
 
 See the
-`Ray Metrics documentation <../ray-metrics.html>`__ for more details, including instructions for scraping these metrics using Prometheus.
+:ref:`Ray Metrics documentation <ray-metrics>` for more details, including instructions for scraping these metrics using Prometheus.

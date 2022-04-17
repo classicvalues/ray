@@ -1,4 +1,4 @@
-// Copyright  The Ray Authors.
+// Copyright 2021 The Ray Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -28,105 +28,34 @@ namespace gcs {
 class MockGcsPlacementGroupSchedulerInterface
     : public GcsPlacementGroupSchedulerInterface {
  public:
-  MOCK_METHOD(void, ScheduleUnplacedBundles,
+  MOCK_METHOD(void,
+              ScheduleUnplacedBundles,
               (std::shared_ptr<GcsPlacementGroup> placement_group,
-               std::function<void(std::shared_ptr<GcsPlacementGroup>)> failure_callback,
-               std::function<void(std::shared_ptr<GcsPlacementGroup>)> success_callback),
+               PGSchedulingFailureCallback failure_callback,
+               PGSchedulingSuccessfulCallback success_callback),
               (override));
   MOCK_METHOD((absl::flat_hash_map<PlacementGroupID, std::vector<int64_t>>),
-              GetBundlesOnNode, (const NodeID &node_id), (override));
-  MOCK_METHOD(void, DestroyPlacementGroupBundleResourcesIfExists,
-              (const PlacementGroupID &placement_group_id), (override));
-  MOCK_METHOD(void, MarkScheduleCancelled, (const PlacementGroupID &placement_group_id),
+              GetBundlesOnNode,
+              (const NodeID &node_id),
+              (override));
+  MOCK_METHOD(void,
+              DestroyPlacementGroupBundleResourcesIfExists,
+              (const PlacementGroupID &placement_group_id),
+              (override));
+  MOCK_METHOD(void,
+              MarkScheduleCancelled,
+              (const PlacementGroupID &placement_group_id),
               (override));
   MOCK_METHOD(
-      void, ReleaseUnusedBundles,
-      ((const std::unordered_map<NodeID, std::vector<rpc::Bundle>> &node_to_bundles)),
+      void,
+      ReleaseUnusedBundles,
+      ((const absl::flat_hash_map<NodeID, std::vector<rpc::Bundle>> &node_to_bundles)),
       (override));
-};
-
-}  // namespace gcs
-}  // namespace ray
-
-namespace ray {
-namespace gcs {
-
-class MockScheduleContext : public ScheduleContext {
- public:
-};
-
-}  // namespace gcs
-}  // namespace ray
-
-namespace ray {
-namespace gcs {
-
-class MockGcsScheduleStrategy : public GcsScheduleStrategy {
- public:
-  MOCK_METHOD(ScheduleMap, Schedule,
-              (std::vector<std::shared_ptr<ray::BundleSpecification>> & bundles,
-               const std::unique_ptr<ScheduleContext> &context,
-               GcsResourceScheduler &gcs_resource_scheduler),
-              (override));
-};
-
-}  // namespace gcs
-}  // namespace ray
-
-namespace ray {
-namespace gcs {
-
-class MockGcsPackStrategy : public GcsPackStrategy {
- public:
-  MOCK_METHOD(ScheduleMap, Schedule,
-              (std::vector<std::shared_ptr<ray::BundleSpecification>> & bundles,
-               const std::unique_ptr<ScheduleContext> &context,
-               GcsResourceScheduler &gcs_resource_scheduler),
-              (override));
-};
-
-}  // namespace gcs
-}  // namespace ray
-
-namespace ray {
-namespace gcs {
-
-class MockGcsSpreadStrategy : public GcsSpreadStrategy {
- public:
-  MOCK_METHOD(ScheduleMap, Schedule,
-              (std::vector<std::shared_ptr<ray::BundleSpecification>> & bundles,
-               const std::unique_ptr<ScheduleContext> &context,
-               GcsResourceScheduler &gcs_resource_scheduler),
-              (override));
-};
-
-}  // namespace gcs
-}  // namespace ray
-
-namespace ray {
-namespace gcs {
-
-class MockGcsStrictPackStrategy : public GcsStrictPackStrategy {
- public:
-  MOCK_METHOD(ScheduleMap, Schedule,
-              (std::vector<std::shared_ptr<ray::BundleSpecification>> & bundles,
-               const std::unique_ptr<ScheduleContext> &context,
-               GcsResourceScheduler &gcs_resource_scheduler),
-              (override));
-};
-
-}  // namespace gcs
-}  // namespace ray
-
-namespace ray {
-namespace gcs {
-
-class MockGcsStrictSpreadStrategy : public GcsStrictSpreadStrategy {
- public:
-  MOCK_METHOD(ScheduleMap, Schedule,
-              (std::vector<std::shared_ptr<ray::BundleSpecification>> & bundles,
-               const std::unique_ptr<ScheduleContext> &context,
-               GcsResourceScheduler &gcs_resource_scheduler),
+  MOCK_METHOD(void,
+              Initialize,
+              ((const absl::flat_hash_map<
+                  PlacementGroupID,
+                  std::vector<std::shared_ptr<BundleSpecification>>> &group_to_bundles)),
               (override));
 };
 
@@ -158,20 +87,28 @@ namespace gcs {
 
 class MockGcsPlacementGroupScheduler : public GcsPlacementGroupScheduler {
  public:
-  MOCK_METHOD(void, ScheduleUnplacedBundles,
+  MOCK_METHOD(void,
+              ScheduleUnplacedBundles,
               (std::shared_ptr<GcsPlacementGroup> placement_group,
-               std::function<void(std::shared_ptr<GcsPlacementGroup>)> failure_handler,
-               std::function<void(std::shared_ptr<GcsPlacementGroup>)> success_handler),
+               PGSchedulingFailureCallback failure_handler,
+               PGSchedulingSuccessfulCallback success_handler),
               (override));
-  MOCK_METHOD(void, DestroyPlacementGroupBundleResourcesIfExists,
-              (const PlacementGroupID &placement_group_id), (override));
-  MOCK_METHOD(void, MarkScheduleCancelled, (const PlacementGroupID &placement_group_id),
+  MOCK_METHOD(void,
+              DestroyPlacementGroupBundleResourcesIfExists,
+              (const PlacementGroupID &placement_group_id),
+              (override));
+  MOCK_METHOD(void,
+              MarkScheduleCancelled,
+              (const PlacementGroupID &placement_group_id),
               (override));
   MOCK_METHOD((absl::flat_hash_map<PlacementGroupID, std::vector<int64_t>>),
-              GetBundlesOnNode, (const NodeID &node_id), (override));
+              GetBundlesOnNode,
+              (const NodeID &node_id),
+              (override));
   MOCK_METHOD(
-      void, ReleaseUnusedBundles,
-      ((const std::unordered_map<NodeID, std::vector<rpc::Bundle>> &node_to_bundles)),
+      void,
+      ReleaseUnusedBundles,
+      ((const absl::flat_hash_map<NodeID, std::vector<rpc::Bundle>> &node_to_bundles)),
       (override));
 };
 
