@@ -188,6 +188,7 @@ message CheckAliveRequest {
 
 message CheckAliveReply {
   GcsStatus status = 1;
+  string ray_version = 2;
 }
 
 message GetInternalConfigRequest {
@@ -498,6 +499,21 @@ service InternalKVGcsService {
   rpc InternalKVDel(InternalKVDelRequest) returns (InternalKVDelReply);
   rpc InternalKVExists(InternalKVExistsRequest) returns (InternalKVExistsReply);
   rpc InternalKVKeys(InternalKVKeysRequest) returns (InternalKVKeysReply);
+}
+
+message PinRuntimeEnvURIRequest {
+  string uri = 1;
+  int32 expiration_s = 2;
+}
+
+message PinRuntimeEnvURIReply {
+  GcsStatus status = 1;
+}
+
+/// Handles pinning package URIs that are stored in the GCS.
+/// Future runtime_env-related RPCs should be added to this service.
+service RuntimeEnvGcsService {
+  rpc PinRuntimeEnvURI(PinRuntimeEnvURIRequest) returns (PinRuntimeEnvURIReply);
 }
 
 message GcsPublishRequest {

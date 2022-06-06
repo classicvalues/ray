@@ -695,8 +695,6 @@ void ReferenceCounter::UpdateObjectPinnedAtRaylet(const ObjectID &object_id,
     if (!it->second.OutOfScope(lineage_pinning_enabled_)) {
       if (check_node_alive_(raylet_id)) {
         it->second.pinned_at_raylet_id = raylet_id;
-        // We eagerly add the pinned location to the set of object locations.
-        AddObjectLocationInternal(it, raylet_id);
       } else {
         ReleasePlasmaObject(it);
         objects_to_recover_.push_back(object_id);
@@ -1216,19 +1214,9 @@ absl::optional<absl::flat_hash_set<NodeID>> ReferenceCounter::GetObjectLocations
   return it->second.locations;
 }
 
-size_t ReferenceCounter::GetObjectSize(const ObjectID &object_id) const {
-  absl::MutexLock lock(&mutex_);
-  auto it = object_id_refs_.find(object_id);
-  if (it == object_id_refs_.end()) {
-    return 0;
-  }
-  return it->second.object_size;
-}
-
 bool ReferenceCounter::HandleObjectSpilled(const ObjectID &object_id,
                                            const std::string spilled_url,
-                                           const NodeID &spilled_node_id,
-                                           int64_t size) {
+                                           const NodeID &spilled_node_id) {
   absl::MutexLock lock(&mutex_);
   auto it = object_id_refs_.find(object_id);
   if (it == object_id_refs_.end()) {
@@ -1253,9 +1241,6 @@ bool ReferenceCounter::HandleObjectSpilled(const ObjectID &object_id,
     if (!spilled_node_id.IsNil()) {
       it->second.spilled_node_id = spilled_node_id;
     }
-    if (size > 0) {
-      it->second.object_size = size;
-    }
     PushToLocationSubscribers(it);
   } else {
     RAY_LOG(DEBUG) << "Object " << object_id << " spilled to dead node "
@@ -1267,7 +1252,7 @@ bool ReferenceCounter::HandleObjectSpilled(const ObjectID &object_id,
 }
 
 absl::optional<LocalityData> ReferenceCounter::GetLocalityData(
-    const ObjectID &object_id) {
+    const ObjectID &object_id) const {
   absl::MutexLock lock(&mutex_);
   // Uses the reference table to return locality data for an object.
   auto it = object_id_refs_.find(object_id);
@@ -1294,11 +1279,16 @@ absl::optional<LocalityData> ReferenceCounter::GetLocalityData(
   //   locations.
   // - If we don't own this object, this will contain a snapshot of the object locations
   //   at future resolution time.
-  const auto &node_ids = it->second.locations;
+  auto node_ids = it->second.locations;
+  // Add location of the primary copy since the object must be there: either in memory or
+  // spilled.
+  if (it->second.pinned_at_raylet_id.has_value()) {
+    node_ids.emplace(it->second.pinned_at_raylet_id.value());
+  }
 
   // We should only reach here if we have valid locality data to return.
   absl::optional<LocalityData> locality_data(
-      {static_cast<uint64_t>(object_size), node_ids});
+      {static_cast<uint64_t>(object_size), std::move(node_ids)});
   return locality_data;
 }
 

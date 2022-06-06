@@ -102,7 +102,8 @@ using SubscriptionFailureCallbackMap =
 // static maps are used to simulate distirubted environment.
 static SubscriptionCallbackMap subscription_callback_map;
 static SubscriptionFailureCallbackMap subscription_failure_callback_map;
-static pubsub::pub_internal::SubscriptionIndex directory;
+static pubsub::pub_internal::SubscriptionIndex directory(
+    rpc::ChannelType::WORKER_OBJECT_LOCATIONS_CHANNEL);
 
 static std::string GenerateID(UniqueID publisher_id, UniqueID subscriber_id) {
   return publisher_id.Binary() + subscriber_id.Binary();
@@ -618,10 +619,36 @@ TEST_F(ReferenceCountTest, TestReferenceStats) {
   rc->RemoveLocalReference(id2, nullptr);
 }
 
+TEST_F(ReferenceCountTest, TestHandleObjectSpilled) {
+  ObjectID obj1 = ObjectID::FromRandom();
+  NodeID node1 = NodeID::FromRandom();
+  rpc::Address address;
+  address.set_ip_address("1234");
+
+  int64_t object_size = 100;
+  rc->AddOwnedObject(obj1,
+                     {},
+                     address,
+                     "file1.py:42",
+                     object_size,
+                     false,
+                     /*add_local_ref=*/true,
+                     absl::optional<NodeID>(node1));
+  rc->HandleObjectSpilled(obj1, "url1", node1);
+  rpc::WorkerObjectLocationsPubMessage object_info;
+  Status status = rc->FillObjectInformation(obj1, &object_info);
+  ASSERT_TRUE(status.ok());
+  ASSERT_EQ(object_info.object_size(), object_size);
+  ASSERT_EQ(object_info.spilled_url(), "url1");
+  ASSERT_EQ(object_info.spilled_node_id(), node1.Binary());
+  rc->RemoveLocalReference(obj1, nullptr);
+}
+
 // Tests fetching of locality data from reference table.
 TEST_F(ReferenceCountTest, TestGetLocalityData) {
   ObjectID obj1 = ObjectID::FromRandom();
   ObjectID obj2 = ObjectID::FromRandom();
+  ObjectID obj3 = ObjectID::FromRandom();
   NodeID node1 = NodeID::FromRandom();
   NodeID node2 = NodeID::FromRandom();
   rpc::Address address;
@@ -670,6 +697,13 @@ TEST_F(ReferenceCountTest, TestGetLocalityData) {
   ASSERT_EQ(locality_data_obj1->nodes_containing_object,
             absl::flat_hash_set<NodeID>({node1}));
 
+  // Include spilled locations in locality data.
+  rc->RemoveObjectLocation(obj1, node1);
+  rc->HandleObjectSpilled(obj1, "spill_loc", node1);
+  locality_data_obj1 = rc->GetLocalityData(obj1);
+  ASSERT_EQ(locality_data_obj1->nodes_containing_object,
+            absl::flat_hash_set<NodeID>({node1}));
+
   // Borrowed object with defined object size and at least one node location should
   // return valid locality data.
   rc->AddLocalReference(obj2, "file.py:43");
@@ -709,8 +743,25 @@ TEST_F(ReferenceCountTest, TestGetLocalityData) {
   auto locality_data_obj2_no_object_size = rc->GetLocalityData(obj2);
   ASSERT_FALSE(locality_data_obj2_no_object_size.has_value());
 
+  // Primary copy location is always returned
+  // even if it's not in-memory (i.e. spilled).
+  rc->AddOwnedObject(obj3,
+                     {},
+                     address,
+                     "file2.py:43",
+                     -1,
+                     false,
+                     /*add_local_ref=*/true);
+  rc->UpdateObjectSize(obj3, 101);
+  rc->UpdateObjectPinnedAtRaylet(obj3, node1);
+  auto locality_data_obj3 = rc->GetLocalityData(obj3);
+  ASSERT_TRUE(locality_data_obj3.has_value());
+  ASSERT_EQ(locality_data_obj3->nodes_containing_object,
+            absl::flat_hash_set<NodeID>({node1}));
+
   rc->RemoveLocalReference(obj1, nullptr);
   rc->RemoveLocalReference(obj2, nullptr);
+  rc->RemoveLocalReference(obj3, nullptr);
 }
 
 // Tests that we can get the owner address correctly for objects that we own,
@@ -2599,6 +2650,7 @@ TEST_F(ReferenceCountLineageEnabledTest, TestPlasmaLocation) {
   ASSERT_TRUE(rc->IsPlasmaObjectPinnedOrSpilled(id, &owned_by_us, &pinned_at, &spilled));
   ASSERT_TRUE(owned_by_us);
   ASSERT_FALSE(pinned_at.IsNil());
+  ASSERT_TRUE(rc->GetObjectLocations(id)->empty());
 
   rc->RemoveLocalReference(id, nullptr);
   ASSERT_FALSE(rc->IsPlasmaObjectPinnedOrSpilled(id, &owned_by_us, &pinned_at, &spilled));

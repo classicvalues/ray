@@ -176,6 +176,8 @@ def multi_gpu_train_one_step(trainer, train_batch) -> Dict:
     load_timer.push_units_processed(train_batch.count)
     learn_timer.push_units_processed(train_batch.count)
 
+    # TODO: Move this into Trainer's `training_iteration` method for
+    #  better transparency.
     trainer._counters[NUM_ENV_STEPS_TRAINED] += train_batch.count
     trainer._counters[NUM_AGENT_STEPS_TRAINED] += train_batch.agent_steps()
 
@@ -421,8 +423,8 @@ class ApplyGradients:
         """Creates an ApplyGradients instance.
 
         Args:
-            workers (WorkerSet): workers to apply gradients to.
-            update_all (bool): If true, updates all workers. Otherwise, only
+            workers: workers to apply gradients to.
+            update_all: If true, updates all workers. Otherwise, only
                 update the worker that produced the sample batch we are
                 currently processing (i.e., A3C style).
         """

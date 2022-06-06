@@ -3,7 +3,7 @@ import numpy as np
 import unittest
 
 import ray
-from ray.rllib.agents.dqn import DQNTrainer
+from ray.rllib.algorithms.dqn import DQN
 from ray.rllib.utils.test_utils import framework_iterator
 from ray.tune.registry import register_env
 
@@ -36,10 +36,10 @@ class TestReproducibility(unittest.TestCase):
                 config = {
                     "seed": 666 if trial in [0, 1] else 999,
                     "min_time_s_per_reporting": 0,
-                    "timesteps_per_iteration": 100,
+                    "min_sample_timesteps_per_reporting": 100,
                     "framework": fw,
                 }
-                agent = DQNTrainer(config=config, env="PickLargest")
+                agent = DQN(config=config, env="PickLargest")
 
                 trajectory = list()
                 for _ in range(8):

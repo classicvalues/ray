@@ -2,6 +2,7 @@ from functools import wraps
 import inspect
 import logging
 import uuid
+import os
 
 from ray import cloudpickle as pickle
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
@@ -19,6 +20,10 @@ from ray.util.tracing.tracing_helper import (
 from ray._private import ray_option_utils
 
 logger = logging.getLogger(__name__)
+
+
+# Hook to call with (fn, resources, strategy) on each local task submission.
+_task_launch_hook = None
 
 
 class RemoteFunction:
@@ -143,7 +148,7 @@ class RemoteFunction:
         # max_calls could not be used in ".options()", we should remove it before
         # merging options from '@ray.remote'.
         default_options.pop("max_calls", None)
-        updated_options = {**default_options, **task_options}
+        updated_options = ray_option_utils.update_options(default_options, task_options)
         ray_option_utils.validate_task_options(updated_options, in_options=True)
 
         # only update runtime_env when ".options()" specifies new runtime_env
@@ -204,7 +209,7 @@ class RemoteFunction:
                 msg = (
                     "Could not serialize the function "
                     f"{self._function_descriptor.repr}. Check "
-                    "https://docs.ray.io/en/master/serialization.html#troubleshooting "
+                    "https://docs.ray.io/en/master/ray-core/objects/serialization.html#troubleshooting "  # noqa
                     "for more information."
                 )
                 raise TypeError(msg) from e
@@ -217,6 +222,14 @@ class RemoteFunction:
 
         # fill task required options
         for k, v in ray_option_utils.task_options.items():
+            if k == "max_retries":
+                # TODO(swang): We need to override max_retries here because the default
+                # value gets set at Ray import time. Ideally, we should allow setting
+                # default values from env vars for other options too.
+                v.default_value = os.environ.get(
+                    "RAY_TASK_MAX_RETRIES", v.default_value
+                )
+                v.default_value = int(v.default_value)
             task_options[k] = task_options.get(k, v.default_value)
         # "max_calls" already takes effects and should not apply again.
         # Remove the default value here.
@@ -278,6 +291,9 @@ class RemoteFunction:
                 serialize=True,
             )
 
+        if _task_launch_hook:
+            _task_launch_hook(self._function_descriptor, resources, scheduling_strategy)
+
         def invocation(args, kwargs):
             if self._is_cross_language:
                 list_args = cross_language.format_args(worker, args, kwargs)
@@ -327,4 +343,4 @@ class RemoteFunction:
 
         from ray.experimental.dag.function_node import FunctionNode
 
-        return FunctionNode(self._function, args, kwargs, {})
+        return FunctionNode(self._function, args, kwargs, self._default_options)
