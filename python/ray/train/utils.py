@@ -10,7 +10,6 @@ from typing import (
     Dict,
     List,
     Any,
-    TYPE_CHECKING,
     Union,
     Callable,
     TypeVar,
@@ -23,11 +22,6 @@ from ray.exceptions import RayActorError
 from ray.types import ObjectRef
 from ray.util.ml_utils.util import find_free_port
 
-if TYPE_CHECKING:
-    from ray.data import Dataset
-    from ray.data.dataset_pipeline import DatasetPipeline
-
-RayDataset = Union["Dataset", "DatasetPipeline"]
 T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
@@ -37,7 +31,7 @@ def check_for_failure(remote_values: List[ObjectRef]) -> bool:
     """Check for actor failure when retrieving the remote values.
 
     Args:
-        remote_values (list): List of object references from Ray actor methods.
+        remote_values: List of object references from Ray actor methods.
 
     Returns:
         True if evaluating all object references is successful, False otherwise.
@@ -107,7 +101,7 @@ def update_env_vars(env_vars: Dict[str, Any]):
     """Updates the environment variables on this worker process.
 
     Args:
-        env_vars (Dict): Environment variables to set.
+        env_vars: Environment variables to set.
     """
     sanitized = {k: str(v) for k, v in env_vars.items()}
     os.environ.update(sanitized)
@@ -120,7 +114,7 @@ def construct_train_func(
 ) -> Callable[[], T]:
     """Validates and constructs the training function to execute.
     Args:
-        train_func (Callable): The training function to execute.
+        train_func: The training function to execute.
             This can either take in no arguments or a ``config`` dict.
         config (Optional[Dict]): Configurations to pass into
             ``train_func``. If None then an empty Dict will be created.

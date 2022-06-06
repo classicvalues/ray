@@ -1,6 +1,8 @@
 from ray.rllib.env.multi_agent_env import MultiAgentEnv
+from ray.rllib.utils.annotations import PublicAPI
 
 
+@PublicAPI
 class PettingZooEnv(MultiAgentEnv):
     """An interface to the PettingZoo MARL environment library.
 
@@ -71,8 +73,9 @@ class PettingZooEnv(MultiAgentEnv):
         super().__init__()
         self.env = env
         env.reset()
-        self._skip_env_checking = True  # TODO avnishn - remove this after making
-        # petting zoo env compatible with check_env
+        # TODO (avnishn): Remove this after making petting zoo env compatible with
+        #  check_env.
+        self._skip_env_checking = True
 
         # Get first observation space, assuming all agents have equal space
         self.observation_space = self.env.observation_space(self.env.agents[0])
@@ -140,11 +143,15 @@ class PettingZooEnv(MultiAgentEnv):
         return self.env.unwrapped
 
 
+@PublicAPI
 class ParallelPettingZooEnv(MultiAgentEnv):
     def __init__(self, env):
         super().__init__()
         self.par_env = env
         self.par_env.reset()
+        # TODO (avnishn): Remove this after making petting zoo env compatible with
+        #  check_env.
+        self._skip_env_checking = True
 
         # Get first observation space, assuming all agents have equal space
         self.observation_space = self.par_env.observation_space(self.par_env.agents[0])

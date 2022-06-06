@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import time
 from typing import (
     TypeVar,
@@ -17,14 +18,14 @@ import numpy as np
 if TYPE_CHECKING:
     import pandas
     import pyarrow
-    from ray.data.impl.block_builder import BlockBuilder
+    from ray.data._internal.block_builder import BlockBuilder
     from ray.data.aggregate import AggregateFn
     from ray.data import Dataset
 
 import ray
 from ray.types import ObjectRef
 from ray.util.annotations import DeveloperAPI
-from ray.data.impl.util import _check_pyarrow_version
+from ray.data._internal.util import _check_pyarrow_version
 
 T = TypeVar("T")
 U = TypeVar("U")
@@ -142,6 +143,7 @@ class _BlockExecStatsBuilder:
 
 
 @DeveloperAPI
+@dataclass
 class BlockMetadata:
     """Metadata about the block.
 
@@ -154,22 +156,15 @@ class BlockMetadata:
         exec_stats: Execution stats for this block.
     """
 
-    def __init__(
-        self,
-        *,
-        num_rows: Optional[int],
-        size_bytes: Optional[int],
-        schema: Union[type, "pyarrow.lib.Schema"],
-        input_files: List[str],
-        exec_stats: Optional[BlockExecStats]
-    ):
-        if input_files is None:
-            input_files = []
-        self.num_rows: Optional[int] = num_rows
-        self.size_bytes: Optional[int] = size_bytes
-        self.schema: Optional[Any] = schema
-        self.input_files: List[str] = input_files
-        self.exec_stats: Optional[BlockExecStats] = exec_stats
+    num_rows: Optional[int]
+    size_bytes: Optional[int]
+    schema: Optional[Union[type, "pyarrow.lib.Schema"]]
+    input_files: Optional[List[str]]
+    exec_stats: Optional[BlockExecStats]
+
+    def __post_init__(self):
+        if self.input_files is None:
+            self.input_files = []
 
 
 @DeveloperAPI
@@ -268,19 +263,19 @@ class BlockAccessor(Generic[T]):
         import pandas
 
         if isinstance(block, pyarrow.Table):
-            from ray.data.impl.arrow_block import ArrowBlockAccessor
+            from ray.data._internal.arrow_block import ArrowBlockAccessor
 
             return ArrowBlockAccessor(block)
         elif isinstance(block, pandas.DataFrame):
-            from ray.data.impl.pandas_block import PandasBlockAccessor
+            from ray.data._internal.pandas_block import PandasBlockAccessor
 
             return PandasBlockAccessor(block)
         elif isinstance(block, bytes):
-            from ray.data.impl.arrow_block import ArrowBlockAccessor
+            from ray.data._internal.arrow_block import ArrowBlockAccessor
 
             return ArrowBlockAccessor.from_bytes(block)
         elif isinstance(block, list):
-            from ray.data.impl.simple_block import SimpleBlockAccessor
+            from ray.data._internal.simple_block import SimpleBlockAccessor
 
             return SimpleBlockAccessor(block)
         else:

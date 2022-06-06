@@ -2,8 +2,8 @@ from typing import Any, Callable, Dict, Optional, Type, Union
 
 import ray
 
-from ray.ml.config import RunConfig
-from ray.ml.trainer import Trainer
+from ray.air.config import RunConfig
+from ray.air.trainer import Trainer
 from ray.tune import TuneError
 from ray.tune.result_grid import ResultGrid
 from ray.tune.trainable import Trainable
@@ -35,7 +35,8 @@ class Tuner:
         tune_config: Tuning algorithm specific configs.
             Refer to ray.tune.tune_config.TuneConfig for more info.
         run_config: Runtime configuration that is specific to individual trials.
-            Refer to ray.ml.config.RunConfig for more info.
+            If passed, this will overwrite the run config passed to the Trainer,
+            if applicable. Refer to ray.air.config.RunConfig for more info.
 
     Usage pattern:
 
@@ -45,8 +46,8 @@ class Tuner:
 
         from ray import tune
         from ray.data import from_pandas
-        from ray.ml.config import RunConfig
-        from ray.ml.train.integrations.xgboost import XGBoostTrainer
+        from ray.air.config import RunConfig
+        from ray.air.train.integrations.xgboost import XGBoostTrainer
         from ray.tune.tuner import Tuner
 
         def get_dataset():
@@ -69,6 +70,12 @@ class Tuner:
                     "CPU": tune.grid_search([1, 2]),
                 },
             },
+            # You can even grid search various datasets in Tune.
+            # "datasets": {
+            #     "train": tune.grid_search(
+            #         [ds1, ds2]
+            #     ),
+            # },
             "params": {
                 "objective": "binary:logistic",
                 "tree_method": "approx",

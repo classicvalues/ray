@@ -55,11 +55,19 @@ class RayTestTimeoutException(Exception):
     pass
 
 
-def make_global_state_accessor(address_info):
-    gcs_options = GcsClientOptions.from_gcs_address(address_info["gcs_address"])
+def make_global_state_accessor(ray_context):
+    gcs_options = GcsClientOptions.from_gcs_address(
+        ray_context.address_info["gcs_address"]
+    )
     global_state_accessor = GlobalStateAccessor(gcs_options)
     global_state_accessor.connect()
     return global_state_accessor
+
+
+def test_external_redis():
+    import os
+
+    return os.environ.get("TEST_EXTERNAL_REDIS") == "1"
 
 
 def _pid_alive(pid):
@@ -205,8 +213,8 @@ def run_string_as_driver(driver_script: str, env: Dict = None, encode: str = "ut
     """Run a driver as a separate process.
 
     Args:
-        driver_script (str): A string to run as a Python script.
-        env (dict): The environment variables for the driver.
+        driver_script: A string to run as a Python script.
+        env: The environment variables for the driver.
 
     Returns:
         The script's output.
@@ -858,8 +866,8 @@ def monitor_memory_usage(
     The monitor will run on the same node as this function is called.
 
     Params:
-        interval_s (int): The interval memory usage information is printed
-        warning_threshold (float): The threshold where the
+        interval_s: The interval memory usage information is printed
+        warning_threshold: The threshold where the
             memory usage warning is printed.
 
     Returns:
@@ -879,13 +887,13 @@ def monitor_memory_usage(
             """The actor that monitor the memory usage of the cluster.
 
             Params:
-                print_interval_s (float): The interval where
+                print_interval_s: The interval where
                     memory usage is printed.
-                record_interval_s (float): The interval where
+                record_interval_s: The interval where
                     memory usage is recorded.
-                warning_threshold (float): The threshold where
+                warning_threshold: The threshold where
                     memory warning is printed
-                n (int): When memory usage is printed,
+                n: When memory usage is printed,
                     top n entries are printed.
             """
             # -- Interval the monitor prints the memory usage information. --
@@ -1238,3 +1246,51 @@ def no_resource_leaks_excluding_node_resources():
             del available_resources[r]
 
     return cluster_resources == available_resources
+
+
+@contextmanager
+def simulate_storage(storage_type, root=None):
+    if storage_type == "fs":
+        if root is None:
+            with tempfile.TemporaryDirectory() as d:
+                yield "file://" + d
+        else:
+            yield "file://" + root
+    elif storage_type == "s3":
+        import uuid
+        from moto import mock_s3
+        from ray.tests.mock_s3_server import start_service, stop_process
+
+        @contextmanager
+        def aws_credentials():
+            old_env = os.environ
+            os.environ["AWS_ACCESS_KEY_ID"] = "testing"
+            os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"
+            os.environ["AWS_SECURITY_TOKEN"] = "testing"
+            os.environ["AWS_SESSION_TOKEN"] = "testing"
+            yield
+            os.environ = old_env
+
+        @contextmanager
+        def moto_s3_server():
+            host = "localhost"
+            port = 5002
+            url = f"http://{host}:{port}"
+            process = start_service("s3", host, port)
+            yield url
+            stop_process(process)
+
+        if root is None:
+            root = uuid.uuid4().hex
+        with moto_s3_server() as s3_server, aws_credentials(), mock_s3():
+            url = f"s3://{root}?region=us-west-2&endpoint_override={s3_server}"
+            yield url
+    else:
+        raise ValueError(f"Unknown storage type: {storage_type}")
+
+
+def job_hook(**kwargs):
+    """Function called by reflection by test_cli_integration."""
+    cmd = " ".join(kwargs["entrypoint"])
+    print(f"hook intercepted: {cmd}")
+    sys.exit(0)

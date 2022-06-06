@@ -1,4 +1,5 @@
 """Common pre-checks for all RLlib experiments."""
+from copy import copy
 import logging
 import gym
 import numpy as np
@@ -6,6 +7,7 @@ import traceback
 from typing import TYPE_CHECKING, Set
 
 from ray.actor import ActorHandle
+from ray.rllib.utils.annotations import DeveloperAPI
 from ray.rllib.utils.spaces.space_utils import convert_element_to_space_type
 from ray.rllib.utils.typing import EnvType
 from ray.util import log_once
@@ -16,6 +18,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+@DeveloperAPI
 def check_env(env: EnvType) -> None:
     """Run pre-checks on env that uncover common errors in environments.
 
@@ -38,7 +41,8 @@ def check_env(env: EnvType) -> None:
     if hasattr(env, "_skip_env_checking") and env._skip_env_checking:
         # This is a work around for some environments that we already have in RLlb
         # that we want to skip checking for now until we have the time to fix them.
-        logger.warning("Skipping env checking for this experiment")
+        if log_once("skip_env_checking"):
+            logger.warning("Skipping env checking for this experiment")
         return
 
     try:
@@ -86,6 +90,7 @@ def check_env(env: EnvType) -> None:
         )
 
 
+@DeveloperAPI
 def check_gym_environments(env: gym.Env) -> None:
     """Checking for common errors in gym environments.
 
@@ -129,16 +134,17 @@ def check_gym_environments(env: gym.Env) -> None:
     if not isinstance(env.action_space, gym.spaces.Space):
         raise ValueError("Action space must be a gym.space")
 
-    # raise a warning if there isn't a max_episode_steps attribute
+    # Raise a warning if there isn't a max_episode_steps attribute.
     if not hasattr(env, "spec") or not hasattr(env.spec, "max_episode_steps"):
-        logger.warning(
-            "Your env doesn't have a .spec.max_episode_steps "
-            "attribute. This is fine if you have set 'horizon' "
-            "in your config dictionary, or `soft_horizon`. "
-            "However, if you haven't, 'horizon' will default "
-            "to infinity, and your environment will not be "
-            "reset."
-        )
+        if log_once("max_episode_steps"):
+            logger.warning(
+                "Your env doesn't have a .spec.max_episode_steps "
+                "attribute. This is fine if you have set 'horizon' "
+                "in your config dictionary, or `soft_horizon`. "
+                "However, if you haven't, 'horizon' will default "
+                "to infinity, and your environment will not be "
+                "reset."
+            )
     # check if sampled actions and observations are contained within their
     # respective action and observation spaces.
 
@@ -194,6 +200,7 @@ def check_gym_environments(env: gym.Env) -> None:
     _check_info(info)
 
 
+@DeveloperAPI
 def check_multiagent_environments(env: "MultiAgentEnv") -> None:
     """Checking for common errors in RLlib MultiAgentEnvs.
 
@@ -218,10 +225,7 @@ def check_multiagent_environments(env: "MultiAgentEnv") -> None:
                 "within your MutiAgentEnv's constructor. "
                 "This will raise an error in the future."
             )
-        env.observation_space = (
-            env.action_space
-        ) = env._spaces_in_preferred_format = None
-        env._agent_ids = set()
+        return
 
     reset_obs = env.reset()
     sampled_obs = env.observation_space_sample()
@@ -263,7 +267,7 @@ def check_multiagent_environments(env: "MultiAgentEnv") -> None:
     if not env.action_space_contains(sampled_action):
         error = (
             _not_contained_error("action_space_sample", "action")
-            + "\n\n sampled_action {sampled_action}\n\n"
+            + f"\n\n sampled_action {sampled_action}\n\n"
         )
         raise ValueError(error)
 
@@ -280,11 +284,12 @@ def check_multiagent_environments(env: "MultiAgentEnv") -> None:
     if not env.observation_space_contains(next_obs):
         error = (
             _not_contained_error("env.step(sampled_action)", "observation")
-            + ":\n\n next_obs: {next_obs} \n\n sampled_obs: {sampled_obs}"
+            + f":\n\n next_obs: {next_obs} \n\n sampled_obs: {sampled_obs}"
         )
         raise ValueError(error)
 
 
+@DeveloperAPI
 def check_base_env(env: "BaseEnv") -> None:
     """Checking for common errors in RLlib BaseEnvs.
 
@@ -413,7 +418,7 @@ def _check_done(done, base_env=False, agent_ids=None):
                         f"env.get_agent_ids() are: {agent_ids}"
                     )
                     raise ValueError(error)
-    elif not isinstance(done, (bool, np.bool, np.bool_)):
+    elif not isinstance(done, (bool, np.bool_)):
         error = (
             "Your step function must return a done that is a boolean. But instead "
             f"was a {type(done)}"
@@ -491,7 +496,7 @@ def _check_if_element_multi_agent_dict(env, element, function_string, base_env=F
                 f" {type(element)}"
             )
         raise ValueError(error)
-    agent_ids: Set = env.get_agent_ids()
+    agent_ids: Set = copy(env.get_agent_ids())
     agent_ids.add("__all__")
 
     if not all(k in agent_ids for k in element):

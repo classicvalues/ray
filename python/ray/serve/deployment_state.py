@@ -5,7 +5,6 @@ import json
 import logging
 import math
 import os
-import pickle
 import random
 import time
 import traceback
@@ -16,6 +15,7 @@ from ray import ObjectRef
 from ray.actor import ActorHandle
 from ray.exceptions import RayActorError, RayError
 from ray.util.placement_group import PlacementGroup
+from ray import cloudpickle
 
 from ray.serve.common import (
     DeploymentInfo,
@@ -147,7 +147,7 @@ class ActorReplicaWrapper:
         self._placement_group_name = self._actor_name + "_placement_group"
         self._detached = detached
         self._controller_name = controller_name
-        self._controller_namespace = ray.serve.api._get_controller_namespace(
+        self._controller_namespace = ray.serve.client.get_controller_namespace(
             detached, _override_controller_namespace=_override_controller_namespace
         )
 
@@ -267,9 +267,11 @@ class ActorReplicaWrapper:
         )
 
         self._actor_resources = deployment_info.replica_config.resource_dict
-        # it is currently not possiible to create a placement group
+        # it is currently not possible to create a placement group
         # with no resources (https://github.com/ray-project/ray/issues/20401)
-        has_resources_assigned = all((r > 0 for r in self._actor_resources.values()))
+        has_resources_assigned = all(
+            (r is not None and r > 0 for r in self._actor_resources.values())
+        )
         if USE_PLACEMENT_GROUP and has_resources_assigned:
             self._placement_group = self.create_placement_group(
                 self._placement_group_name, self._actor_resources
@@ -284,8 +286,9 @@ class ActorReplicaWrapper:
         init_args = (
             self.deployment_name,
             self.replica_tag,
-            deployment_info.replica_config.init_args,
-            deployment_info.replica_config.init_kwargs,
+            deployment_info.replica_config.serialized_deployment_def,
+            deployment_info.replica_config.serialized_init_args,
+            deployment_info.replica_config.serialized_init_kwargs,
             deployment_info.deployment_config.to_proto_bytes(),
             version,
             self._controller_name,
@@ -307,7 +310,7 @@ class ActorReplicaWrapper:
                 # String replicaTag,
                 self.replica_tag,
                 # String deploymentDef
-                deployment_info.replica_config.func_or_class_name,
+                deployment_info.replica_config.deployment_def_name,
                 # byte[] initArgsbytes
                 msgpack_serialize(deployment_info.replica_config.init_args),
                 # byte[] deploymentConfigBytes,
@@ -334,7 +337,12 @@ class ActorReplicaWrapper:
 
         self._allocated_obj_ref = self._actor_handle.is_allocated.remote()
         self._ready_obj_ref = self._actor_handle.reconfigure.remote(
-            deployment_info.deployment_config.user_config
+            deployment_info.deployment_config.user_config,
+            # Ensure that `is_allocated` will execute before `reconfigure`,
+            # because `reconfigure` runs user code that could block the replica
+            # asyncio loop. If that happens before `is_allocated` is executed,
+            # the `is_allocated` call won't be able to run.
+            self._allocated_obj_ref,
         )
 
     def update_user_config(self, user_config: Any):
@@ -692,7 +700,7 @@ class DeploymentReplica(VersionedReplica):
         Should handle the case where the replica has already stopped.
 
         Returns:
-            status (ReplicaStartupStatus): Most recent state of replica by
+            status: Most recent state of replica by
                 querying actor obj ref
         """
         status, version = self._actor.check_ready()
@@ -752,7 +760,11 @@ class DeploymentReplica(VersionedReplica):
         if self._actor.actor_resources is None:
             return "UNKNOWN", "UNKNOWN"
 
-        required = {k: v for k, v in self._actor.actor_resources.items() if v > 0}
+        required = {
+            k: v
+            for k, v in self._actor.actor_resources.items()
+            if v is not None and v > 0
+        }
         available = {
             k: v for k, v in self._actor.available_resources.items() if k in required
         }
@@ -769,8 +781,8 @@ class ReplicaStateContainer:
         """Add the provided replica under the provided state.
 
         Args:
-            state (ReplicaState): state to add the replica under.
-            replica (VersionedReplica): replica to add.
+            state: state to add the replica under.
+            replica: replica to add.
         """
         assert isinstance(state, ReplicaState)
         assert isinstance(replica, VersionedReplica)
@@ -785,7 +797,7 @@ class ReplicaStateContainer:
         in order of state as passed in.
 
         Args:
-            states (str): states to consider. If not specified, all replicas
+            states: states to consider. If not specified, all replicas
                 are considered.
         """
         if states is None:
@@ -810,13 +822,13 @@ class ReplicaStateContainer:
         in order of state as passed in.
 
         Args:
-            exclude_version (DeploymentVersion): if specified, replicas of the
+            exclude_version: if specified, replicas of the
                 provided version will *not* be removed.
-            states (str): states to consider. If not specified, all replicas
+            states: states to consider. If not specified, all replicas
                 are considered.
-            max_replicas (int): max number of replicas to return. If not
+            max_replicas: max number of replicas to return. If not
                 specified, will pop all replicas matching the criteria.
-            ranking_function (callable): optional function to sort the replicas
+            ranking_function: optional function to sort the replicas
                 within each state before they are truncated to max_replicas and
                 returned.
         """
@@ -860,7 +872,7 @@ class ReplicaStateContainer:
                 specified, all versions are considered.
             version(DeploymentVersion): version to filter to. If not specified,
                 all versions are considered.
-            states (str): states to consider. If not specified, all replicas
+            states: states to consider. If not specified, all replicas
                 are considered.
         """
         if states is None:
@@ -930,15 +942,21 @@ class DeploymentState:
         self._replica_constructor_retry_counter: int = 0
         self._replicas: ReplicaStateContainer = ReplicaStateContainer()
         self._curr_status_info: DeploymentStatusInfo = DeploymentStatusInfo(
-            DeploymentStatus.UPDATING
+            self._name, DeploymentStatus.UPDATING
         )
+        self._deleting = False
 
     def get_target_state_checkpoint_data(self):
         """
         Return deployment's target state submitted by user's deployment call.
         Should be persisted and outlive current ray cluster.
         """
-        return (self._target_info, self._target_replicas, self._target_version)
+        return (
+            self._target_info,
+            self._target_replicas,
+            self._target_version,
+            self._deleting,
+        )
 
     def get_checkpoint_data(self):
         return self.get_target_state_checkpoint_data()
@@ -951,6 +969,7 @@ class DeploymentState:
             self._target_info,
             self._target_replicas,
             self._target_version,
+            self._deleting,
         ) = target_state_checkpoint
 
     def recover_current_state_from_replica_actor_names(
@@ -1033,8 +1052,11 @@ class DeploymentState:
 
         else:
             self._target_replicas = 0
+            self._deleting = True
 
-        self._curr_status_info = DeploymentStatusInfo(DeploymentStatus.UPDATING)
+        self._curr_status_info = DeploymentStatusInfo(
+            self._name, DeploymentStatus.UPDATING
+        )
 
         version_str = (
             deployment_info if deployment_info is None else deployment_info.version
@@ -1295,6 +1317,7 @@ class DeploymentState:
                 self._replica_constructor_retry_counter = -1
             else:
                 self._curr_status_info = DeploymentStatusInfo(
+                    name=self._name,
                     status=DeploymentStatus.UNHEALTHY,
                     message=(
                         "The Deployment constructor failed "
@@ -1317,12 +1340,14 @@ class DeploymentState:
             == 0
         ):
             # Check for deleting.
-            if target_replica_count == 0 and all_running_replica_cnt == 0:
+            if self._deleting and all_running_replica_cnt == 0:
                 return True
 
             # Check for a non-zero number of deployments.
-            elif target_replica_count == running_at_target_version_replica_cnt:
-                self._curr_status_info = DeploymentStatusInfo(DeploymentStatus.HEALTHY)
+            if target_replica_count == running_at_target_version_replica_cnt:
+                self._curr_status_info = DeploymentStatusInfo(
+                    self._name, DeploymentStatus.HEALTHY
+                )
                 return False
 
         return False
@@ -1401,7 +1426,7 @@ class DeploymentState:
                 # recovered or a new deploy happens.
                 if replica.version == self._target_version:
                     self._curr_status_info: DeploymentStatusInfo = DeploymentStatusInfo(
-                        DeploymentStatus.UNHEALTHY
+                        self._name, DeploymentStatus.UNHEALTHY
                     )
 
         slow_start_replicas = []
@@ -1494,6 +1519,7 @@ class DeploymentState:
             deleted = self._check_curr_status()
         except Exception:
             self._curr_status_info = DeploymentStatusInfo(
+                name=self._name,
                 status=DeploymentStatus.UNHEALTHY,
                 message="Failed to update deployment:" f"\n{traceback.format_exc()}",
             )
@@ -1591,9 +1617,10 @@ class DeploymentStateManager:
         )
         checkpoint = self._kv_store.get(CHECKPOINT_KEY)
         if checkpoint is not None:
-            (deployment_state_info, self._deleted_deployment_metadata) = pickle.loads(
-                checkpoint
-            )
+            (
+                deployment_state_info,
+                self._deleted_deployment_metadata,
+            ) = cloudpickle.loads(checkpoint)
 
             for deployment_tag, checkpoint_data in deployment_state_info.items():
                 deployment_state = self._create_deployment_state(deployment_tag)
@@ -1638,10 +1665,9 @@ class DeploymentStateManager:
         }
         self._kv_store.put(
             CHECKPOINT_KEY,
-            # NOTE(simon): Make sure to use pickle so we don't save any ray
-            # object that relies on external state (e.g. gcs). For code object,
-            # we are explicitly using cloudpickle to serialize them.
-            pickle.dumps((deployment_state_info, self._deleted_deployment_metadata)),
+            cloudpickle.dumps(
+                (deployment_state_info, self._deleted_deployment_metadata)
+            ),
         )
 
     def get_running_replica_infos(
@@ -1679,11 +1705,10 @@ class DeploymentStateManager:
         else:
             return None
 
-    def get_deployment_statuses(self) -> Dict[str, DeploymentStatusInfo]:
-        return {
-            name: state.curr_status_info
-            for name, state in self._deployment_states.items()
-        }
+    def get_deployment_statuses(self) -> List[DeploymentStatusInfo]:
+        return list(
+            map(lambda state: state.curr_status_info, self._deployment_states.values())
+        )
 
     def deploy(self, deployment_name: str, deployment_info: DeploymentInfo) -> bool:
         """Deploy the deployment.

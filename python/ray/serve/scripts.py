@@ -1,12 +1,11 @@
 #!/usr/bin/env python
-import json
 import os
-import pathlib
-import click
-import time
 import sys
-from typing import Optional, Union
+import time
 import yaml
+import click
+import pathlib
+from typing import Optional, Union
 
 import ray
 from ray._private.utils import import_attr
@@ -22,10 +21,10 @@ from ray.dashboard.modules.dashboard_sdk import parse_runtime_env_args
 from ray.dashboard.modules.serve.sdk import ServeSubmissionClient
 from ray.autoscaler._private.cli_logger import cli_logger
 from ray.serve.api import build as build_app
-from ray.serve.api import Application
+from ray.serve.application import Application
 from ray.serve.deployment_graph import (
-    DeploymentFunctionNode,
-    DeploymentNode,
+    FunctionNode,
+    ClassNode,
 )
 
 APP_DIR_HELP_STR = (
@@ -140,7 +139,7 @@ def shutdown(address: str, namespace: str):
         address=address,
         namespace=namespace,
     )
-    serve.api._connect()
+    serve.context._connect()
     serve.shutdown()
 
 
@@ -186,7 +185,7 @@ def deploy(config_file_name: str, address: str):
     short_help="Run a Serve app.",
     help=(
         "Runs the Serve app from the specified import path or YAML config.\n"
-        "Any import path must lead to an Application or DeploymentNode object. "
+        "Any import path must lead to an Application or ClassNode object. "
         "By default, this will block and periodically log status. If you "
         "Ctrl-C the command, it will tear down the app."
     ),
@@ -350,7 +349,7 @@ def config(address: str):
 def status(address: str):
     app_status = ServeSubmissionClient(address).get_status()
     if app_status is not None:
-        print(json.dumps(app_status["statuses"], indent=4))
+        print(yaml.safe_dump(app_status, default_flow_style=False, sort_keys=False))
 
 
 @cli.command(
@@ -385,7 +384,7 @@ def delete(address: str, yes: bool):
 @cli.command(
     short_help="Writes a Pipeline's config file.",
     help=(
-        "Imports the DeploymentNode or DeploymentFunctionNode at IMPORT_PATH "
+        "Imports the ClassNode or FunctionNode at IMPORT_PATH "
         "and generates a structured config for it that can be used by "
         "`serve deploy` or the REST API. "
     ),
@@ -412,11 +411,11 @@ def delete(address: str, yes: bool):
 def build(app_dir: str, output_path: Optional[str], import_path: str):
     sys.path.insert(0, app_dir)
 
-    node: Union[DeploymentNode, DeploymentFunctionNode] = import_attr(import_path)
-    if not isinstance(node, (DeploymentNode, DeploymentFunctionNode)):
+    node: Union[ClassNode, FunctionNode] = import_attr(import_path)
+    if not isinstance(node, (ClassNode, FunctionNode)):
         raise TypeError(
-            f"Expected '{import_path}' to be DeploymentNode or "
-            f"DeploymentFunctionNode, but got {type(node)}."
+            f"Expected '{import_path}' to be ClassNode or "
+            f"FunctionNode, but got {type(node)}."
         )
 
     app = build_app(node)
